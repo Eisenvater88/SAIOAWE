@@ -1,0 +1,223 @@
+:root {
+  --bg: #0f1117;
+  --bg-panel: #171a23;
+  --bg-input: #1e2230;
+  --border: #2a2f3e;
+  --text: #e2e6f0;
+  --text-dim: #8b93a7;
+  --accent: #6c8cff;
+  --accent-dim: #3a4a8c;
+  --green: #3ecf8e;
+  --red: #ff6b6b;
+  --yellow: #ffd166;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+#root { height: 100vh; display: flex; flex-direction: column; }
+
+button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 600;
+}
+button:hover { filter: brightness(1.12); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.secondary { background: var(--bg-input); color: var(--text); border: 1px solid var(--border); }
+button.danger { background: transparent; color: var(--red); border: 1px solid var(--red); }
+button.small { padding: 4px 10px; font-size: 12px; }
+
+input, textarea, select {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  width: 100%;
+  font-family: inherit;
+}
+textarea { resize: vertical; min-height: 70px; }
+input:focus, textarea:focus, select:focus { outline: 1px solid var(--accent); }
+
+label.field { display: block; margin-bottom: 10px; }
+label.field > span {
+  display: block;
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 0 20px;
+  height: 52px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.topbar .logo { font-weight: 800; letter-spacing: 0.08em; color: var(--accent); }
+.topbar nav { display: flex; gap: 4px; }
+.topbar nav button {
+  background: transparent;
+  color: var(--text-dim);
+  font-weight: 600;
+  border-radius: 6px;
+}
+.topbar nav button.active { background: var(--bg-input); color: var(--text); }
+.topbar .spacer { flex: 1; }
+.topbar .conn { font-size: 12px; color: var(--text-dim); }
+
+.page { flex: 1; overflow: auto; padding: 20px; }
+.page.no-pad { padding: 0; overflow: hidden; }
+
+.split { display: flex; gap: 20px; height: 100%; }
+.split > .list-col { width: 340px; flex-shrink: 0; }
+.split > .detail-col { flex: 1; min-width: 0; }
+
+.card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  margin-bottom: 10px;
+}
+.card.clickable { cursor: pointer; }
+.card.clickable:hover, .card.selected { border-color: var(--accent); }
+.card h3 { margin: 0 0 4px; font-size: 15px; }
+.card .dim { color: var(--text-dim); font-size: 12px; }
+
+.row { display: flex; gap: 10px; align-items: center; }
+.row.between { justify-content: space-between; }
+.row.wrap { flex-wrap: wrap; }
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.badge.running { background: var(--accent-dim); color: var(--accent); }
+.badge.succeeded { background: #14402c; color: var(--green); }
+.badge.failed { background: #4a1f1f; color: var(--red); }
+.badge.canceled, .badge.pending, .badge.skipped { background: var(--bg-input); color: var(--text-dim); }
+
+.error-banner {
+  background: #4a1f1f;
+  color: var(--red);
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  white-space: pre-wrap;
+}
+
+.checkbox-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.checkbox-row input { width: auto; }
+
+pre.output {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+details { margin: 6px 0; }
+details summary { cursor: pointer; color: var(--text-dim); font-size: 12px; }
+
+/* ------- editor layout ------- */
+.editor { display: flex; height: 100%; }
+.editor .canvas { flex: 1; position: relative; }
+.editor .sidebar {
+  width: 340px;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 14px;
+}
+.editor .sidebar h3 { margin: 4px 0 10px; font-size: 13px; text-transform: uppercase; color: var(--text-dim); letter-spacing: 0.05em; }
+.editor-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.editor-toolbar .wf-name { font-weight: 700; margin-right: 8px; }
+
+.palette-item {
+  border: 1px solid var(--border);
+  background: var(--bg-input);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.palette-item .name { font-weight: 600; font-size: 13px; }
+.palette-item .desc { color: var(--text-dim); font-size: 11px; }
+
+/* ------- react-flow agent node ------- */
+.agent-node {
+  background: var(--bg-panel);
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  min-width: 170px;
+  max-width: 240px;
+}
+.agent-node .title { font-weight: 700; font-size: 13px; }
+.agent-node .sub { color: var(--text-dim); font-size: 11px; margin-top: 2px; }
+.agent-node.status-running { border-color: var(--accent); box-shadow: 0 0 14px rgba(108, 140, 255, 0.45); }
+.agent-node.status-succeeded { border-color: var(--green); }
+.agent-node.status-failed { border-color: var(--red); }
+.agent-node.status-skipped { opacity: 0.45; border-style: dashed; }
+.agent-node.selected-node { outline: 2px dashed var(--accent); outline-offset: 3px; }
+
+.run-log {
+  font-family: Consolas, monospace;
+  font-size: 11.5px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.run-log .ev { margin-bottom: 3px; white-space: pre-wrap; word-break: break-word; }
+.run-log .ev .k { color: var(--accent); font-weight: 700; }
+
+.react-flow__attribution { display: none; }

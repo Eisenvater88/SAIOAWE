@@ -1,0 +1,8 @@
+/target
+/web/node_modules
+/web/dist
+/web/tsconfig.tsbuildinfo
+saioawe.db
+saioawe.db-shm
+saioawe.db-wal
+.claude/settings.local.json

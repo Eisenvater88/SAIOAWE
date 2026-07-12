@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "saioawe",
+      "runtimeExecutable": "./target/debug/saioawe.exe",
+      "runtimeArgs": ["--port", "8321", "--ollama-model", "gemma4:latest"],
+      "port": 8321
+    }
+  ]
+}
