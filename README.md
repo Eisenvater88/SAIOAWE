@@ -1,4 +1,4 @@
-# SAIOAWE — Agent Workflow Orchestrator
+# SAIOAWE — Small AI Orchestrator Agent and Workflow Engine 
 
 A self-hosted agent runtime: describe agents with **agent cards**, wire them
 into **directed workflows** on a visual canvas, give them tools via **MCP
