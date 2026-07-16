@@ -43,4 +43,10 @@ pub struct Config {
     /// Timeout in seconds for a single MCP tool call
     #[arg(long, env = "SAIOAWE_TOOL_TIMEOUT", default_value_t = 120)]
     pub tool_timeout: u64,
+
+    /// Extra browser origins allowed to call the API besides same-origin
+    /// (e.g. a dev server or reverse proxy: http://localhost:5173).
+    /// Repeat the flag or comma-separate when using the env var.
+    #[arg(long = "allowed-origin", env = "SAIOAWE_ALLOWED_ORIGINS", value_delimiter = ',')]
+    pub allowed_origins: Vec<String>,
 }

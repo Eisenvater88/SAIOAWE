@@ -63,11 +63,27 @@ cd ..
 
 Open http://127.0.0.1:8321. Every flag is also an env var (`SAIOAWE_HOST`,
 `SAIOAWE_PORT`, `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TEMPERATURE`,
-`SAIOAWE_DB`, `SAIOAWE_WEB_DIR`, `SAIOAWE_LLM_TIMEOUT`, `SAIOAWE_TOOL_TIMEOUT`).
+`SAIOAWE_DB`, `SAIOAWE_WEB_DIR`, `SAIOAWE_LLM_TIMEOUT`, `SAIOAWE_TOOL_TIMEOUT`,
+`SAIOAWE_ALLOWED_ORIGINS`).
 Use a tool-capable model (e.g. `gemma4:latest`, `qwen3.5:9b`) — agents without
 MCP servers work with any model.
 
-For UI development: `cd web && npm run dev` (Vite proxies `/api` to :8321).
+For UI development: `cd web && npm run dev` (Vite proxies `/api` to :8321 and
+strips the browser Origin so the same-origin guard is satisfied).
+
+## Security model
+
+The API is unauthenticated and can spawn user-configured MCP commands, so it
+must never be reachable by a hostile web page. A same-origin guard enforces
+this: for a loopback bind the `Host` header must be loopback (defeats DNS
+rebinding), and any `Origin` header must match the request's own host (blocks
+cross-site `fetch()` — the drive-by RCE vector). Header-less clients (curl,
+scripts) and the served UI pass untouched.
+
+Bind to loopback (`127.0.0.1`, the default) for personal use. To expose it
+beyond localhost, put it behind a reverse proxy that adds real authentication —
+`--host 0.0.0.0` alone has no auth. Add extra allowed browser origins (a dev
+server, a proxy) with `--allowed-origin http://localhost:5173` (repeatable).
 
 ## Using it
 
@@ -112,9 +128,14 @@ graph runs unchanged.
 
 - Loop semantics: after its first activation, each firing edge re-activates
   the target with that payload alone (loop bodies are best kept linear).
-  A conditional edge leaving a loop stays pending until it fires — nodes
-  the loop never reaches are marked "skipped" when the run ends.
+  A conditional edge leaving a loop stays pending until it fires — when the run
+  goes quiescent, still-pending edges settle as silent, which can complete a
+  waiting join node (or mark truly unreached nodes "skipped").
 - A failing node fails the run (in-flight sibling branches finish first).
+- Crash safety: runs execute in memory, so if the process dies mid-run the run
+  cannot continue. At startup any run left `running` is marked `interrupted`
+  (not auto-resumed — a node may already have sent an e-mail or created a
+  calendar entry, and re-running would repeat it). Re-trigger it manually.
 - MCP: tools only (no resources/prompts/sampling yet); server-initiated
   requests are ignored.
 - Scheduler granularity is ~15 s; missed fires while the server is down

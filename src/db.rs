@@ -188,4 +188,36 @@ impl Db {
         out.sort_by(|a, b| a.started_at.cmp(&b.started_at));
         Ok(out)
     }
+
+    /// Runs live in a detached async task; if the process dies mid-run the row
+    /// is left as "running" forever. At startup, mark any such run (and its
+    /// in-flight node runs) as "interrupted" so history is honest and the
+    /// scheduler is not confused by ghost runs. Deliberately does NOT auto
+    /// resume: a node may already have caused side effects (sent an e-mail,
+    /// created a calendar entry) and re-running it would repeat them.
+    pub fn reconcile_interrupted(&self) -> Result<usize> {
+        let mut running: Vec<Run> = self.list_runs(None, 100_000)?;
+        running.retain(|r| r.status == "running" || r.status == "pending");
+        let count = running.len();
+        let now = crate::models::now_rfc3339();
+        for mut run in running {
+            for mut nr in self.node_runs_for(&run.id)? {
+                if nr.status == "running" || nr.status == "pending" {
+                    nr.status = "interrupted".into();
+                    nr.error = Some("process restarted before this agent finished".into());
+                    nr.finished_at.get_or_insert_with(|| now.clone());
+                    self.put_node_run(&nr)?;
+                }
+            }
+            run.status = "interrupted".into();
+            run.error = Some(
+                "the server was restarted while this run was in progress; \
+                 it was not resumed (re-run it manually if needed)"
+                    .into(),
+            );
+            run.finished_at.get_or_insert_with(|| now.clone());
+            self.put_run(&run)?;
+        }
+        Ok(count)
+    }
 }

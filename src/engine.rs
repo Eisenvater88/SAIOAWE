@@ -155,6 +155,8 @@ impl Engine {
             }
             m
         };
+        let edges_by_id: HashMap<&str, &WorkflowEdge> =
+            graph.edges.iter().map(|e| (e.id.as_str(), e)).collect();
         // Forward incoming edge ids per node.
         let mut fwd_incoming: HashMap<&str, Vec<&WorkflowEdge>> = HashMap::new();
         for e in &graph.edges {
@@ -205,6 +207,10 @@ impl Engine {
 
         // edge id -> Some(payload) if fired, None if resolved silent.
         let mut edge_state: HashMap<String, Option<String>> = HashMap::new();
+        // Conditional forward edges from loop-region nodes that were silent so
+        // far. They may still fire on a later pass, so they are held here
+        // rather than committed; at quiescence they are settled as silent.
+        let mut pending_forward: HashSet<String> = HashSet::new();
         let mut first_activated: HashSet<String> = HashSet::new();
         let mut activations_count: HashMap<String, u32> = HashMap::new();
         let mut queue: VecDeque<Activation> = VecDeque::new();
@@ -271,8 +277,73 @@ impl Engine {
                 queue = deferred;
             }
 
-            let Some(joined) = tasks.join_next().await else {
-                break; // nothing running; queue is empty or we stopped on error
+            let joined = match tasks.join_next().await {
+                Some(j) => j,
+                None => {
+                    // Quiescence: nothing running, nothing queued.
+                    if first_error.is_some() || pending_forward.is_empty() {
+                        break;
+                    }
+                    // Provisional conditional edges from loop regions will now
+                    // never fire, so settle them as silent. This can complete a
+                    // join node that was only waiting on such an edge (its other
+                    // inputs having already fired) - the bug where a fired input
+                    // was silently discarded. A settled edge that skips its
+                    // target cascades that target's outgoing edges too.
+                    let mut progressed = false;
+                    let mut silent_edges: VecDeque<String> =
+                        pending_forward.drain().collect();
+                    while let Some(edge_id) = silent_edges.pop_front() {
+                        let Some(edge) = edges_by_id.get(edge_id.as_str()).copied() else {
+                            continue;
+                        };
+                        if edge_state.contains_key(&edge_id) {
+                            continue;
+                        }
+                        edge_state.insert(edge_id.clone(), None);
+                        self.emit(
+                            run,
+                            Some(edge.source.clone()),
+                            "edge_resolved",
+                            json!({ "edge_id": edge.id, "taken": false }),
+                        );
+                        let target = edge.target.clone();
+                        if first_activated.contains(&target) {
+                            continue;
+                        }
+                        let incoming =
+                            fwd_incoming.get(target.as_str()).cloned().unwrap_or_default();
+                        if !incoming.iter().all(|e| edge_state.contains_key(&e.id)) {
+                            continue;
+                        }
+                        first_activated.insert(target.clone());
+                        let sections: Vec<(String, String, bool)> = incoming
+                            .iter()
+                            .filter_map(|e| {
+                                edge_state.get(&e.id).and_then(|p| {
+                                    p.as_ref().map(|p| (agent_name(&e.source), p.clone(), false))
+                                })
+                            })
+                            .collect();
+                        progressed = true;
+                        if sections.is_empty() {
+                            self.mark_skipped(run, &target, &agent_name(&target));
+                            for oe in outgoing.get(target.as_str()).cloned().unwrap_or_default() {
+                                if !back_edges.contains(&oe.id)
+                                    && !edge_state.contains_key(&oe.id)
+                                {
+                                    silent_edges.push_back(oe.id.clone());
+                                }
+                            }
+                        } else {
+                            queue.push_back(Activation { node_id: target, sections });
+                        }
+                    }
+                    if progressed {
+                        continue;
+                    }
+                    break;
+                }
             };
             let (node_id, _activation_no, res) = joined.context("node task panicked")?;
             busy.remove(&node_id);
@@ -320,9 +391,13 @@ impl Engine {
                                 continue;
                             }
                             // Forward edge.
-                            if !taken && can_rerun.contains(&nid) {
-                                // Provisional silence: the source sits in a loop
-                                // and may fire this edge on a later pass.
+                            if taken {
+                                pending_forward.remove(&edge.id);
+                            } else if output.is_some() && can_rerun.contains(&nid) {
+                                // Provisional silence: the source ran inside a
+                                // loop region and may fire this edge on a later
+                                // pass. Hold it; settle at quiescence.
+                                pending_forward.insert(edge.id.clone());
                                 continue;
                             }
                             edge_state.insert(
@@ -360,27 +435,7 @@ impl Engine {
                                 .collect();
                             if sections.is_empty() {
                                 // No input fired: skip this node and cascade.
-                                let nr = NodeRun {
-                                    id: new_id(),
-                                    run_id: run.id.clone(),
-                                    node_id: target.clone(),
-                                    agent_name: agent_name(&target),
-                                    status: "skipped".into(),
-                                    input: String::new(),
-                                    output: String::new(),
-                                    transcript: Value::Null,
-                                    error: None,
-                                    activation: 0,
-                                    started_at: now_rfc3339(),
-                                    finished_at: Some(now_rfc3339()),
-                                };
-                                let _ = self.db.put_node_run(&nr);
-                                self.emit(
-                                    run,
-                                    Some(target.clone()),
-                                    "node_skipped",
-                                    json!({ "agent_name": nr.agent_name }),
-                                );
+                                self.mark_skipped(run, &target, &agent_name(&target));
                                 worklist.push_back((target, None));
                             } else if first_error.is_none() {
                                 queue.push_back(Activation { node_id: target, sections });
@@ -406,29 +461,35 @@ impl Engine {
             if first_activated.contains(&node.id) {
                 continue;
             }
-            let nr = NodeRun {
-                id: new_id(),
-                run_id: run.id.clone(),
-                node_id: node.id.clone(),
-                agent_name: agent_name(&node.id),
-                status: "skipped".into(),
-                input: String::new(),
-                output: String::new(),
-                transcript: Value::Null,
-                error: None,
-                activation: 0,
-                started_at: now_rfc3339(),
-                finished_at: Some(now_rfc3339()),
-            };
-            let _ = self.db.put_node_run(&nr);
-            self.emit(
-                run,
-                Some(node.id.clone()),
-                "node_skipped",
-                json!({ "agent_name": nr.agent_name }),
-            );
+            first_activated.insert(node.id.clone());
+            self.mark_skipped(run, &node.id, &agent_name(&node.id));
         }
         Ok(())
+    }
+
+    /// Records a skipped node run and emits the corresponding event.
+    fn mark_skipped(&self, run: &Run, node_id: &str, agent_name: &str) {
+        let nr = NodeRun {
+            id: new_id(),
+            run_id: run.id.clone(),
+            node_id: node_id.to_string(),
+            agent_name: agent_name.to_string(),
+            status: "skipped".into(),
+            input: String::new(),
+            output: String::new(),
+            transcript: Value::Null,
+            error: None,
+            activation: 0,
+            started_at: now_rfc3339(),
+            finished_at: Some(now_rfc3339()),
+        };
+        let _ = self.db.put_node_run(&nr);
+        self.emit(
+            run,
+            Some(node_id.to_string()),
+            "node_skipped",
+            json!({ "agent_name": agent_name }),
+        );
     }
 
     /// Decides whether an edge fires for the given source output.
@@ -447,27 +508,49 @@ impl Engine {
                     ChatMessage::new(
                         "user",
                         format!(
-                            "Condition: {}\n\nAgent output:\n{}\n\nDoes the output satisfy the condition? YES or NO.",
+                            "Condition: {}\n\nAgent output:\n{}\n\nDoes the output satisfy the condition?",
                             edge.condition, output
                         ),
                     ),
                 ];
+                // Constrain the judge to a typed verdict so routing never
+                // hinges on substring-matching YES/NO out of prose.
+                let schema = json!({
+                    "type": "object",
+                    "properties": {
+                        "satisfied": { "type": "boolean" },
+                        "reason": { "type": "string" }
+                    },
+                    "required": ["satisfied"]
+                });
                 let reply = self
                     .ollama
-                    .chat(&self.default_model, &messages, &[], 0.0)
+                    .chat_structured(&self.default_model, &messages, schema, 0.0)
                     .await
                     .context("LLM condition check failed")?;
-                let upper = reply.content.to_uppercase();
-                match (upper.find("YES"), upper.find("NO")) {
-                    (Some(y), Some(n)) => y < n,
-                    (Some(_), None) => true,
-                    (None, Some(_)) => false,
-                    (None, None) => {
-                        tracing::warn!(
-                            "condition judge gave no YES/NO (\"{}\") - treating as NO",
-                            reply.content
-                        );
-                        false
+                match serde_json::from_str::<Value>(&reply.content)
+                    .ok()
+                    .and_then(|v| v.get("satisfied").and_then(|s| s.as_bool()))
+                {
+                    Some(verdict) => verdict,
+                    None => {
+                        // Fallback: word-boundary YES/NO (never substrings of
+                        // NOTICED / EYES). Defaults to NO if truly ambiguous.
+                        let has = |w: &str| {
+                            regex::Regex::new(&format!(r"(?i)\b{w}\b"))
+                                .unwrap()
+                                .is_match(&reply.content)
+                        };
+                        let (yes, no) = (has("yes"), has("no"));
+                        if yes == no {
+                            tracing::warn!(
+                                "condition judge gave no clear verdict (\"{}\") - treating as NO",
+                                reply.content
+                            );
+                            false
+                        } else {
+                            yes
+                        }
                     }
                 }
             }

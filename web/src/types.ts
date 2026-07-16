@@ -83,7 +83,7 @@ export interface Run {
   id: string
   workflow_id: string
   workflow_name: string
-  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled'
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'interrupted'
   trigger: string
   input: string
   error?: string | null

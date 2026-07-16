@@ -31,6 +31,11 @@ async fn main() -> Result<()> {
         .init();
 
     let db = Arc::new(Db::open(&cfg.db)?);
+    match db.reconcile_interrupted() {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!("marked {n} run(s) interrupted (left running by a previous restart)"),
+        Err(e) => tracing::error!("run reconciliation failed: {e:#}"),
+    }
     let ollama = Arc::new(OllamaClient::new(&cfg.ollama_url, cfg.llm_timeout));
     let mcp = Arc::new(McpManager::new(Duration::from_secs(cfg.tool_timeout)));
     let (events, _) = broadcast::channel(1024);
