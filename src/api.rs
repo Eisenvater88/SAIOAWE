@@ -1,7 +1,9 @@
+use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, Request, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::Stream;
@@ -11,7 +13,6 @@ use serde_json::{json, Value};
 use std::convert::Infallible;
 use std::sync::Arc;
 use tokio_stream::wrappers::BroadcastStream;
-use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::config::Config;
@@ -84,8 +85,65 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/runs/{id}/cancel", post(cancel_run))
         .route("/api/events", get(sse_events))
         .fallback_service(static_files)
-        .layer(CorsLayer::permissive())
+        .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
+}
+
+fn is_loopback_bind(host: &str) -> bool {
+    matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
+}
+
+/// Same-origin guard. The API is unauthenticated and can spawn user-configured
+/// MCP commands, so a browser being tricked into calling it (drive-by fetch,
+/// DNS rebinding) would be remote code execution. Two checks close that:
+///
+/// 1. For a loopback bind, the `Host` header must name loopback:port - this
+///    defeats DNS rebinding, where an attacker page resolves its own domain to
+///    127.0.0.1 and thus sends `Host: attacker.com`.
+/// 2. An `Origin` header, if present, must match the request's own host (or an
+///    explicitly allowed origin) - this blocks cross-site `fetch()` from any
+///    other web page, which browsers stamp with their own Origin.
+///
+/// Same-origin requests from the served UI (and header-less clients like curl)
+/// pass untouched. Production is single-origin; dev uses the Vite proxy.
+async fn guard(
+    State(st): State<Arc<AppState>>,
+    req: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let cfg = &st.cfg;
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+
+    if is_loopback_bind(&cfg.host) {
+        let allowed = [
+            format!("127.0.0.1:{}", cfg.port),
+            format!("localhost:{}", cfg.port),
+            format!("[::1]:{}", cfg.port),
+        ];
+        match &host {
+            Some(h) if allowed.iter().any(|a| a == h) => {}
+            _ => return Err(StatusCode::FORBIDDEN),
+        }
+    }
+
+    if let Some(origin) = req
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|v| v.to_str().ok())
+    {
+        let origin_authority = origin.split("://").nth(1).unwrap_or(origin);
+        let same_origin = host.as_deref() == Some(origin_authority);
+        let allowed = cfg.allowed_origins.iter().any(|o| o == origin);
+        if !same_origin && !allowed {
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
+
+    Ok(next.run(req).await)
 }
 
 // ---------------------------------------------------------------- config

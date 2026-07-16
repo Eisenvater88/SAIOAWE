@@ -133,6 +133,40 @@ impl OllamaClient {
         Ok(parsed.message)
     }
 
+    /// Chat completion constrained to a JSON schema via Ollama's `format`
+    /// parameter. Returns the assistant message whose `content` is a JSON
+    /// document matching `schema`. Used for reliable routing decisions.
+    pub async fn chat_structured(
+        &self,
+        model: &str,
+        messages: &[ChatMessage],
+        schema: Value,
+        temperature: f32,
+    ) -> Result<ChatMessage> {
+        let body = serde_json::json!({
+            "model": model,
+            "messages": messages,
+            "stream": false,
+            "format": schema,
+            "options": { "temperature": temperature },
+        });
+        let resp = self
+            .http
+            .post(format!("{}/api/chat", self.base_url))
+            .json(&body)
+            .send()
+            .await
+            .context("request to Ollama failed - is Ollama running?")?;
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(anyhow!("Ollama returned {status}: {text}"));
+        }
+        let parsed: ChatResponse =
+            serde_json::from_str(&text).context("unexpected response from Ollama /api/chat")?;
+        Ok(parsed.message)
+    }
+
     /// List locally available models (GET /api/tags).
     pub async fn list_models(&self) -> Result<Vec<String>> {
         let resp = self
