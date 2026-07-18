@@ -206,6 +206,7 @@ details summary { cursor: pointer; color: var(--text-dim); font-size: 12px; }
 .agent-node.status-failed { border-color: var(--red); }
 .agent-node.status-skipped { opacity: 0.45; border-style: dashed; }
 .agent-node.selected-node { outline: 2px dashed var(--accent); outline-offset: 3px; }
+.agent-node.file-node { border-style: dotted; background: var(--bg); }
 
 .run-log {
   font-family: Consolas, monospace;

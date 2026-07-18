@@ -21,8 +21,8 @@ Reply with exactly one word: YES or NO.";
 /// One pending execution of a node: the payloads it should run with.
 struct Activation {
     node_id: String,
-    /// (source agent name, payload, arrived via loop-back edge)
-    sections: Vec<(String, String, bool)>,
+    /// (section heading, payload)
+    sections: Vec<(String, String)>,
 }
 
 pub struct Engine {
@@ -191,16 +191,36 @@ impl Engine {
         };
 
         let agent_name = |node_id: &str| -> String {
-            nodes
-                .get(node_id)
-                .and_then(|n| {
-                    self.db
-                        .get::<AgentCard>("agent_cards", &n.agent_card_id)
-                        .ok()
-                        .flatten()
-                })
+            let Some(node) = nodes.get(node_id) else {
+                return node_id.to_string();
+            };
+            if node.kind == "file" {
+                return format!("File: {}", file_display_name(node));
+            }
+            self.db
+                .get::<AgentCard>("agent_cards", &node.agent_card_id)
+                .ok()
+                .flatten()
                 .map(|c| c.name)
                 .unwrap_or_else(|| node_id.to_string())
+        };
+
+        // Heading of the input section a downstream agent sees for a payload
+        // coming out of `node_id`.
+        let section_label = |node_id: &str, via_loop: bool| -> String {
+            match nodes.get(node_id) {
+                Some(n) if n.kind == "file" => {
+                    format!("Content of file \"{}\"", file_display_name(n))
+                }
+                _ => {
+                    let name = agent_name(node_id);
+                    if via_loop {
+                        format!("Output from upstream agent \"{name}\" (loop iteration)")
+                    } else {
+                        format!("Output from upstream agent \"{name}\"")
+                    }
+                }
+            }
         };
 
         // edge id -> Some(payload) if fired, None if resolved silent.
@@ -220,7 +240,7 @@ impl Engine {
                 let sections = if input.trim().is_empty() {
                     Vec::new()
                 } else {
-                    vec![("Workflow input".to_string(), input.to_string(), false)]
+                    vec![("Workflow input".to_string(), input.to_string())]
                 };
                 queue.push_back(Activation {
                     node_id: node.id.clone(),
@@ -311,9 +331,8 @@ impl Engine {
                                     queue.push_back(Activation {
                                         node_id: edge.target.clone(),
                                         sections: vec![(
-                                            agent_name(&nid),
+                                            section_label(&nid, true),
                                             output.clone().unwrap_or_default(),
-                                            true,
                                         )],
                                     });
                                 }
@@ -335,9 +354,8 @@ impl Engine {
                                     queue.push_back(Activation {
                                         node_id: target,
                                         sections: vec![(
-                                            agent_name(&nid),
+                                            section_label(&nid, false),
                                             output.clone().unwrap_or_default(),
-                                            false,
                                         )],
                                     });
                                 }
@@ -348,12 +366,12 @@ impl Engine {
                                 continue; // still waiting for other inputs
                             }
                             first_activated.insert(target.clone());
-                            let sections: Vec<(String, String, bool)> = incoming
+                            let sections: Vec<(String, String)> = incoming
                                 .iter()
                                 .filter_map(|e| {
                                     edge_state.get(&e.id).and_then(|payload| {
                                         payload.as_ref().map(|p| {
-                                            (agent_name(&e.source), p.clone(), false)
+                                            (section_label(&e.source, false), p.clone())
                                         })
                                     })
                                 })
@@ -476,7 +494,8 @@ impl Engine {
         Ok(base != edge.negate)
     }
 
-    /// Executes one activation of a node: an LLM loop with MCP tool dispatch.
+    /// Executes one activation of a node. Agent nodes run an LLM loop with
+    /// MCP tool dispatch; file nodes read their file and emit its content.
     async fn run_node(
         self: &Arc<Self>,
         run: &Run,
@@ -484,18 +503,27 @@ impl Engine {
         input: String,
         activation: u32,
     ) -> Result<String> {
-        let card: AgentCard = self
-            .db
-            .get("agent_cards", &node.agent_card_id)?
-            .ok_or_else(|| anyhow!("agent card {} not found", node.agent_card_id))?;
+        let card: Option<AgentCard> = if node.kind == "file" {
+            None
+        } else {
+            Some(
+                self.db
+                    .get("agent_cards", &node.agent_card_id)?
+                    .ok_or_else(|| anyhow!("agent card {} not found", node.agent_card_id))?,
+            )
+        };
+        let (display_name, input_shown) = match &card {
+            None => (format!("File: {}", file_display_name(node)), node.file_path.clone()),
+            Some(card) => (card.name.clone(), input.clone()),
+        };
 
         let mut node_run = NodeRun {
             id: new_id(),
             run_id: run.id.clone(),
             node_id: node.id.clone(),
-            agent_name: card.name.clone(),
+            agent_name: display_name.clone(),
             status: "running".into(),
-            input: input.clone(),
+            input: input_shown,
             output: String::new(),
             transcript: Value::Null,
             error: None,
@@ -508,10 +536,16 @@ impl Engine {
             run,
             Some(node.id.clone()),
             "node_started",
-            json!({ "agent_name": card.name, "activation": activation }),
+            json!({ "agent_name": display_name, "activation": activation }),
         );
 
-        let result = self.agent_loop(run, node, &card, &input).await;
+        let result = match &card {
+            None => tokio::fs::read_to_string(&node.file_path)
+                .await
+                .with_context(|| format!("reading file '{}'", node.file_path))
+                .map(|content| (content, Value::Null)),
+            Some(card) => self.agent_loop(run, node, card, &input).await,
+        };
         node_run.finished_at = Some(now_rfc3339());
         let output = match result {
             Ok((output, transcript)) => {
@@ -652,23 +686,24 @@ impl Engine {
     }
 }
 
-fn render_input(sections: &[(String, String, bool)]) -> String {
+fn render_input(sections: &[(String, String)]) -> String {
     if sections.is_empty() {
         return "Execute your task.".to_string();
     }
     sections
         .iter()
-        .map(|(name, payload, via_loop)| {
-            if name == "Workflow input" {
-                format!("# Workflow input\n{payload}")
-            } else if *via_loop {
-                format!("# Output from upstream agent \"{name}\" (loop iteration)\n{payload}")
-            } else {
-                format!("# Output from upstream agent \"{name}\"\n{payload}")
-            }
-        })
+        .map(|(heading, payload)| format!("# {heading}\n{payload}"))
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+/// Short display name of a file node: the file name portion of its path.
+fn file_display_name(node: &WorkflowNode) -> String {
+    std::path::Path::new(&node.file_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| node.file_path.clone())
 }
 
 /// DFS edge classification: an edge pointing at a node on the current DFS
@@ -731,6 +766,21 @@ fn classify_back_edges(graph: &Graph) -> HashSet<String> {
 /// bounded by the workflow's step budget); edges must reference existing
 /// nodes and conditions must be well-formed.
 pub fn validate_graph(graph: &Graph) -> Result<()> {
+    for n in &graph.nodes {
+        match n.kind.as_str() {
+            "" | "agent" => {
+                if n.agent_card_id.trim().is_empty() {
+                    bail!("node {}: no agent card selected", n.id);
+                }
+            }
+            "file" => {
+                if n.file_path.trim().is_empty() {
+                    bail!("file node {}: no file path set", n.id);
+                }
+            }
+            other => bail!("node {}: unknown node kind '{other}'", n.id),
+        }
+    }
     let ids: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
     for e in &graph.edges {
         if !ids.contains(e.source.as_str()) || !ids.contains(e.target.as_str()) {

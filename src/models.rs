@@ -38,16 +38,28 @@ pub struct Position {
     pub y: f64,
 }
 
-/// A node in a workflow graph: an instance of an agent card plus
-/// workflow-specific instructions.
+fn default_node_kind() -> String {
+    "agent".into()
+}
+
+/// A node in a workflow graph. Kind "agent" is an instance of an agent card
+/// plus workflow-specific instructions; kind "file" reads a local text file
+/// and emits its content as output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowNode {
     pub id: String,
+    /// "agent" | "file"
+    #[serde(default = "default_node_kind")]
+    pub kind: String,
+    #[serde(default)]
     pub agent_card_id: String,
     /// Task description for this agent within this workflow. Appended to the
     /// agent card's system prompt.
     #[serde(default)]
     pub instructions: String,
+    /// kind "file": absolute or server-relative path of the text file to read.
+    #[serde(default)]
+    pub file_path: String,
     #[serde(default)]
     pub position: Position,
 }
