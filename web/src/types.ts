@@ -16,10 +16,14 @@ export interface Position {
   y: number
 }
 
+export type NodeKind = 'agent' | 'file'
+
 export interface WorkflowNode {
   id: string
+  kind: NodeKind
   agent_card_id: string
   instructions: string
+  file_path: string
   position: Position
 }
 

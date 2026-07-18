@@ -16,8 +16,14 @@ import '@xyflow/react/dist/style.css'
 import { api, subscribeRunEvents } from '../api'
 import type { AgentCard, ConditionKind, RunEvent, Schedule, Workflow } from '../types'
 import AgentNode, { type AgentNodeData } from './AgentNode'
+import FileNode from './FileNode'
 
-const nodeTypes = { agent: AgentNode }
+const nodeTypes = { agent: AgentNode, file: FileNode }
+
+const fileLabel = (path: string) => {
+  const base = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
+  return base || 'File source'
+}
 
 let idCounter = 0
 const freshId = () => `n${Date.now().toString(36)}_${idCounter++}`
@@ -60,16 +66,21 @@ function styleEdge(e: Edge): Edge {
 function toFlow(wf: Workflow, agents: AgentCard[]): { nodes: RFNode[]; edges: Edge[] } {
   const agentName = (id: string) => agents.find((a) => a.id === id)?.name ?? '⚠ missing agent'
   return {
-    nodes: wf.graph.nodes.map((n) => ({
-      id: n.id,
-      type: 'agent',
-      position: n.position,
-      data: {
-        label: agentName(n.agent_card_id),
-        agentCardId: n.agent_card_id,
-        instructions: n.instructions,
-      },
-    })),
+    nodes: wf.graph.nodes.map((n) => {
+      const kind = n.kind ?? 'agent'
+      return {
+        id: n.id,
+        type: kind,
+        position: n.position,
+        data: {
+          kind,
+          label: kind === 'file' ? fileLabel(n.file_path ?? '') : agentName(n.agent_card_id),
+          agentCardId: n.agent_card_id ?? '',
+          instructions: n.instructions ?? '',
+          filePath: n.file_path ?? '',
+        },
+      }
+    }),
     edges: wf.graph.edges.map((e) =>
       styleEdge({
         id: e.id,
@@ -192,7 +203,28 @@ export default function WorkflowEditor({
         id,
         type: 'agent',
         position: { x: 80 + (ns.length % 4) * 260, y: 80 + Math.floor(ns.length / 4) * 140 },
-        data: { label: agent.name, agentCardId: agent.id, instructions: '' },
+        data: {
+          kind: 'agent',
+          label: agent.name,
+          agentCardId: agent.id,
+          instructions: '',
+          filePath: '',
+        },
+      },
+    ])
+    setSelectedNode(id)
+    setSelectedEdge(null)
+  }
+
+  const addFileNode = () => {
+    const id = freshId()
+    setNodes((ns) => [
+      ...ns,
+      {
+        id,
+        type: 'file',
+        position: { x: 80 + (ns.length % 4) * 260, y: 80 + Math.floor(ns.length / 4) * 140 },
+        data: { kind: 'file', label: 'File source', agentCardId: '', instructions: '', filePath: '' },
       },
     ])
     setSelectedNode(id)
@@ -206,8 +238,10 @@ export default function WorkflowEditor({
     graph: {
       nodes: nodes.map((n) => ({
         id: n.id,
+        kind: n.data.kind ?? 'agent',
         agent_card_id: n.data.agentCardId,
         instructions: n.data.instructions,
+        file_path: n.data.filePath ?? '',
         position: { x: n.position.x, y: n.position.y },
       })),
       edges: edges.map((e) => {
@@ -300,6 +334,9 @@ export default function WorkflowEditor({
         if (patch.agentCardId) {
           data.label = agents.find((a) => a.id === patch.agentCardId)?.name ?? '⚠ missing agent'
         }
+        if (patch.filePath !== undefined) {
+          data.label = fileLabel(patch.filePath)
+        }
         return { ...n, data }
       }),
     )
@@ -384,7 +421,29 @@ export default function WorkflowEditor({
       <div className="sidebar">
         {error && <div className="error-banner">{error}</div>}
 
-        {selected && (
+        {selected && selected.data.kind === 'file' && (
+          <>
+            <h3>File source</h3>
+            <label className="field">
+              <span>File path (text file on the server machine)</span>
+              <input
+                value={selected.data.filePath}
+                onChange={(e) => updateSelected({ filePath: e.target.value })}
+                placeholder="D:\data\input.txt"
+              />
+            </label>
+            <div className="dim" style={{ fontSize: 12, marginBottom: 10 }}>
+              The file is read fresh on every run; its content is passed as
+              input to the connected agent(s).
+            </div>
+            <button className="danger small" onClick={deleteSelected}>
+              Remove node
+            </button>
+            <hr style={{ borderColor: 'var(--border)', margin: '16px 0' }} />
+          </>
+        )}
+
+        {selected && selected.data.kind !== 'file' && (
           <>
             <h3>Node settings</h3>
             <label className="field">
@@ -490,6 +549,16 @@ export default function WorkflowEditor({
                 </button>
               </div>
             ))}
+            <h3 style={{ marginTop: 14 }}>Sources</h3>
+            <div className="palette-item">
+              <div>
+                <div className="name">📄 File source</div>
+                <div className="desc">Feeds the content of a text file into the workflow.</div>
+              </div>
+              <button className="small" onClick={addFileNode}>
+                + Add
+              </button>
+            </div>
             <div className="dim" style={{ fontSize: 12, marginTop: 6 }}>
               Tip: click an edge to give it a condition, or draw an edge back to
               an earlier agent to build a loop.

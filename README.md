@@ -29,6 +29,10 @@ a local **Ollama** instance.
   agent's final output into the target agent's input. Fan-out (one output to
   many agents) and fan-in (many outputs joined into one input) both work;
   independent branches run in parallel.
+- **File source node**: instead of an agent, a node can be a file source — it
+  reads a text file from the server machine on every run and emits its
+  content, so downstream agents receive the file's text as input (section
+  heading `Content of file "<name>"`).
 - **Conditional edges**: an edge can require the source output to
   *contain* a text, *match* a regex, or satisfy a natural-language predicate
   judged by the LLM ("the review approves the draft") — each optionally
