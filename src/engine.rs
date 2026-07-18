@@ -337,11 +337,11 @@ impl Engine {
                             continue;
                         }
                         first_activated.insert(target.clone());
-                        let sections: Vec<(String, String, bool)> = incoming
+                        let sections: Vec<(String, String)> = incoming
                             .iter()
                             .filter_map(|e| {
                                 edge_state.get(&e.id).and_then(|p| {
-                                    p.as_ref().map(|p| (agent_name(&e.source), p.clone(), false))
+                                    p.as_ref().map(|p| (section_label(&e.source, false), p.clone()))
                                 })
                             })
                             .collect();
