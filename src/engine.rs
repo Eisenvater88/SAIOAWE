@@ -199,6 +199,9 @@ impl Engine {
             if node.kind == "file" {
                 return format!("File: {}", file_display_name(node));
             }
+            if node.kind == "file_dest" {
+                return format!("Write: {}", file_display_name(node));
+            }
             self.db
                 .get::<AgentCard>("agent_cards", &node.agent_card_id)
                 .ok()
@@ -213,6 +216,9 @@ impl Engine {
             match nodes.get(node_id) {
                 Some(n) if n.kind == "file" => {
                     format!("Content of file \"{}\"", file_display_name(n))
+                }
+                Some(n) if n.kind == "file_dest" => {
+                    format!("Content written to file \"{}\"", file_display_name(n))
                 }
                 _ => {
                     let name = agent_name(node_id);
@@ -286,7 +292,13 @@ impl Engine {
                         .get(&act.node_id)
                         .ok_or_else(|| anyhow!("unknown node {}", act.node_id))?
                         .clone();
-                    let node_input = render_input(&act.sections);
+                    // Destination nodes persist their input verbatim, so they
+                    // get the raw payload without the agent-facing framing.
+                    let node_input = if node.kind == "file_dest" {
+                        render_dest_input(&act.sections)
+                    } else {
+                        render_input(&act.sections)
+                    };
                     let engine = self.clone();
                     let run = run.clone();
                     tasks.spawn(async move {
@@ -578,7 +590,8 @@ impl Engine {
     }
 
     /// Executes one activation of a node. Agent nodes run an LLM loop with
-    /// MCP tool dispatch; file nodes read their file and emit its content.
+    /// MCP tool dispatch; file nodes read their file and emit its content;
+    /// file destination nodes write their input to a file and pass it through.
     async fn run_node(
         self: &Arc<Self>,
         run: &Run,
@@ -586,7 +599,7 @@ impl Engine {
         input: String,
         activation: u32,
     ) -> Result<String> {
-        let card: Option<AgentCard> = if node.kind == "file" {
+        let card: Option<AgentCard> = if node.kind == "file" || node.kind == "file_dest" {
             None
         } else {
             Some(
@@ -596,7 +609,10 @@ impl Engine {
             )
         };
         let (display_name, input_shown) = match &card {
-            None => (format!("File: {}", file_display_name(node)), node.file_path.clone()),
+            None if node.kind == "file" => {
+                (format!("File: {}", file_display_name(node)), node.file_path.clone())
+            }
+            None => (format!("Write: {}", file_display_name(node)), input.clone()),
             Some(card) => (card.name.clone(), input.clone()),
         };
 
@@ -623,10 +639,13 @@ impl Engine {
         );
 
         let result = match &card {
-            None => tokio::fs::read_to_string(&node.file_path)
+            None if node.kind == "file" => tokio::fs::read_to_string(&node.file_path)
                 .await
                 .with_context(|| format!("reading file '{}'", node.file_path))
                 .map(|content| (content, Value::Null)),
+            None => write_dest_file(node, &input)
+                .await
+                .map(|()| (input.clone(), Value::Null)),
             Some(card) => self.agent_loop(run, node, card, &input).await,
         };
         node_run.finished_at = Some(now_rfc3339());
@@ -780,6 +799,57 @@ fn render_input(sections: &[(String, String)]) -> String {
         .join("\n\n")
 }
 
+/// Input rendering for file destination nodes: a single payload is persisted
+/// verbatim; a fan-in keeps the section headings so the sources stay
+/// distinguishable in the written file.
+fn render_dest_input(sections: &[(String, String)]) -> String {
+    match sections {
+        [] => String::new(),
+        [(_, payload)] => payload.clone(),
+        many => many
+            .iter()
+            .map(|(heading, payload)| format!("# {heading}\n{payload}"))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    }
+}
+
+/// Writes a destination node's payload to its file, creating parent
+/// directories as needed. In append mode a blank line separates the new
+/// entry from existing content.
+async fn write_dest_file(node: &WorkflowNode, content: &str) -> Result<()> {
+    let path = std::path::Path::new(&node.file_path);
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("creating directory '{}'", parent.display()))?;
+        }
+    }
+    if node.append {
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await
+            .with_context(|| format!("opening file '{}' for append", node.file_path))?;
+        let existing = file.metadata().await.map(|m| m.len()).unwrap_or(0);
+        let sep = if existing > 0 { "\n\n" } else { "" };
+        file.write_all(format!("{sep}{content}").as_bytes())
+            .await
+            .with_context(|| format!("appending to file '{}'", node.file_path))?;
+        file.flush()
+            .await
+            .with_context(|| format!("flushing file '{}'", node.file_path))?;
+    } else {
+        tokio::fs::write(path, content)
+            .await
+            .with_context(|| format!("writing file '{}'", node.file_path))?;
+    }
+    Ok(())
+}
+
 /// Short display name of a file node: the file name portion of its path.
 fn file_display_name(node: &WorkflowNode) -> String {
     std::path::Path::new(&node.file_path)
@@ -856,7 +926,7 @@ pub fn validate_graph(graph: &Graph) -> Result<()> {
                     bail!("node {}: no agent card selected", n.id);
                 }
             }
-            "file" => {
+            "file" | "file_dest" => {
                 if n.file_path.trim().is_empty() {
                     bail!("file node {}: no file path set", n.id);
                 }

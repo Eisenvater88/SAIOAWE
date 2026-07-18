@@ -44,11 +44,12 @@ fn default_node_kind() -> String {
 
 /// A node in a workflow graph. Kind "agent" is an instance of an agent card
 /// plus workflow-specific instructions; kind "file" reads a local text file
-/// and emits its content as output.
+/// and emits its content as output; kind "file_dest" writes its input to a
+/// local file and passes the content through unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowNode {
     pub id: String,
-    /// "agent" | "file"
+    /// "agent" | "file" | "file_dest"
     #[serde(default = "default_node_kind")]
     pub kind: String,
     #[serde(default)]
@@ -57,9 +58,13 @@ pub struct WorkflowNode {
     /// agent card's system prompt.
     #[serde(default)]
     pub instructions: String,
-    /// kind "file": absolute or server-relative path of the text file to read.
+    /// kinds "file"/"file_dest": absolute or server-relative path of the
+    /// text file to read from / write to.
     #[serde(default)]
     pub file_path: String,
+    /// kind "file_dest": append to the file instead of overwriting it.
+    #[serde(default)]
+    pub append: bool,
     #[serde(default)]
     pub position: Position,
 }

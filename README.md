@@ -33,6 +33,11 @@ a local **Ollama** instance.
   reads a text file from the server machine on every run and emits its
   content, so downstream agents receive the file's text as input (section
   heading `Content of file "<name>"`).
+- **File destination node**: the write-side counterpart — it persists the
+  input it receives to a file on the server machine (overwrite or append,
+  parent folders are created) and passes the content through unchanged, so
+  intermediate or final results survive without bloating the workflow. On
+  fan-in, section headings are kept so the sources stay distinguishable.
 - **Conditional edges**: an edge can require the source output to
   *contain* a text, *match* a regex, or satisfy a natural-language predicate
   judged by the LLM ("the review approves the draft") — each optionally

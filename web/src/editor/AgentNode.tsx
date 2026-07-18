@@ -1,11 +1,12 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 
 export type AgentNodeData = {
-  kind: 'agent' | 'file'
+  kind: 'agent' | 'file' | 'file_dest'
   label: string
   agentCardId: string
   instructions: string
   filePath: string
+  append?: boolean
   status?: string
   activation?: number
 }

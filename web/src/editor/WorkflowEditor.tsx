@@ -17,12 +17,13 @@ import { api, subscribeRunEvents } from '../api'
 import type { AgentCard, ConditionKind, RunEvent, Schedule, Workflow } from '../types'
 import AgentNode, { type AgentNodeData } from './AgentNode'
 import FileNode from './FileNode'
+import FileDestNode from './FileDestNode'
 
-const nodeTypes = { agent: AgentNode, file: FileNode }
+const nodeTypes = { agent: AgentNode, file: FileNode, file_dest: FileDestNode }
 
-const fileLabel = (path: string) => {
+const fileLabel = (path: string, fallback = 'File source') => {
   const base = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
-  return base || 'File source'
+  return base || fallback
 }
 
 let idCounter = 0
@@ -74,10 +75,16 @@ function toFlow(wf: Workflow, agents: AgentCard[]): { nodes: RFNode[]; edges: Ed
         position: n.position,
         data: {
           kind,
-          label: kind === 'file' ? fileLabel(n.file_path ?? '') : agentName(n.agent_card_id),
+          label:
+            kind === 'file'
+              ? fileLabel(n.file_path ?? '')
+              : kind === 'file_dest'
+                ? fileLabel(n.file_path ?? '', 'File destination')
+                : agentName(n.agent_card_id),
           agentCardId: n.agent_card_id ?? '',
           instructions: n.instructions ?? '',
           filePath: n.file_path ?? '',
+          append: n.append ?? false,
         },
       }
     }),
@@ -231,6 +238,28 @@ export default function WorkflowEditor({
     setSelectedEdge(null)
   }
 
+  const addFileDestNode = () => {
+    const id = freshId()
+    setNodes((ns) => [
+      ...ns,
+      {
+        id,
+        type: 'file_dest',
+        position: { x: 80 + (ns.length % 4) * 260, y: 80 + Math.floor(ns.length / 4) * 140 },
+        data: {
+          kind: 'file_dest',
+          label: 'File destination',
+          agentCardId: '',
+          instructions: '',
+          filePath: '',
+          append: false,
+        },
+      },
+    ])
+    setSelectedNode(id)
+    setSelectedEdge(null)
+  }
+
   const currentWorkflow = (): Workflow => ({
     ...workflow,
     name,
@@ -242,6 +271,7 @@ export default function WorkflowEditor({
         agent_card_id: n.data.agentCardId,
         instructions: n.data.instructions,
         file_path: n.data.filePath ?? '',
+        append: n.data.append ?? false,
         position: { x: n.position.x, y: n.position.y },
       })),
       edges: edges.map((e) => {
@@ -335,7 +365,10 @@ export default function WorkflowEditor({
           data.label = agents.find((a) => a.id === patch.agentCardId)?.name ?? '⚠ missing agent'
         }
         if (patch.filePath !== undefined) {
-          data.label = fileLabel(patch.filePath)
+          data.label = fileLabel(
+            patch.filePath,
+            n.data.kind === 'file_dest' ? 'File destination' : 'File source',
+          )
         }
         return { ...n, data }
       }),
@@ -443,7 +476,40 @@ export default function WorkflowEditor({
           </>
         )}
 
-        {selected && selected.data.kind !== 'file' && (
+        {selected && selected.data.kind === 'file_dest' && (
+          <>
+            <h3>File destination</h3>
+            <label className="field">
+              <span>File path (written on the server machine)</span>
+              <input
+                value={selected.data.filePath}
+                onChange={(e) => updateSelected({ filePath: e.target.value })}
+                placeholder="D:\data\result.md"
+              />
+            </label>
+            <div className="checkbox-row">
+              <input
+                type="checkbox"
+                id="dest-append"
+                checked={selected.data.append ?? false}
+                onChange={(e) => updateSelected({ append: e.target.checked })}
+              />
+              <label htmlFor="dest-append">Append instead of overwrite</label>
+            </div>
+            <div className="dim" style={{ fontSize: 12, marginBottom: 10 }}>
+              The input this node receives is written to the file on every
+              activation (missing folders are created). It also passes the
+              content through unchanged, so you can chain further agents
+              after it.
+            </div>
+            <button className="danger small" onClick={deleteSelected}>
+              Remove node
+            </button>
+            <hr style={{ borderColor: 'var(--border)', margin: '16px 0' }} />
+          </>
+        )}
+
+        {selected && selected.data.kind !== 'file' && selected.data.kind !== 'file_dest' && (
           <>
             <h3>Node settings</h3>
             <label className="field">
@@ -549,13 +615,22 @@ export default function WorkflowEditor({
                 </button>
               </div>
             ))}
-            <h3 style={{ marginTop: 14 }}>Sources</h3>
+            <h3 style={{ marginTop: 14 }}>Sources & destinations</h3>
             <div className="palette-item">
               <div>
                 <div className="name">📄 File source</div>
                 <div className="desc">Feeds the content of a text file into the workflow.</div>
               </div>
               <button className="small" onClick={addFileNode}>
+                + Add
+              </button>
+            </div>
+            <div className="palette-item">
+              <div>
+                <div className="name">💾 File destination</div>
+                <div className="desc">Writes the output it receives to a file (overwrite or append).</div>
+              </div>
+              <button className="small" onClick={addFileDestNode}>
                 + Add
               </button>
             </div>
