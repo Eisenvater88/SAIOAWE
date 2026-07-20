@@ -18,8 +18,10 @@ import type { AgentCard, ConditionKind, RunEvent, Schedule, Workflow } from '../
 import AgentNode, { type AgentNodeData } from './AgentNode'
 import FileNode from './FileNode'
 import FileDestNode from './FileDestNode'
+import SelfLoopEdge from './SelfLoopEdge'
 
 const nodeTypes = { agent: AgentNode, file: FileNode, file_dest: FileDestNode }
+const edgeTypes = { selfloop: SelfLoopEdge }
 
 const fileLabel = (path: string, fallback = 'File source') => {
   const base = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
@@ -51,6 +53,7 @@ function styleEdge(e: Edge): Edge {
     d.live === 'taken' ? 'var(--green)' : d.live === 'silent' ? '#444a5a' : undefined
   return {
     ...e,
+    type: e.source === e.target ? 'selfloop' : undefined,
     label: edgeLabel(d),
     animated: d.live === 'taken',
     markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
@@ -427,6 +430,7 @@ export default function WorkflowEditor({
           nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
